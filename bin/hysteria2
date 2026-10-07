@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# hysteria2 - management command for the managed Hysteria2 inbound.
+set -Eeuo pipefail
+
+# Resolve the real location (the command is normally a symlink in /usr/local/bin).
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _dir="$(cd "$(dirname "$_self")" && pwd)"
+    _self="$(readlink "$_self")"
+    [[ "$_self" == /* ]] || _self="$_dir/$_self"
+done
+HY2_ROOT_DIR="$(cd "$(dirname "$_self")/.." && pwd)"
+HY2_LIB_DIR="$HY2_ROOT_DIR/lib"
+unset _self _dir
+
+for _m in common validate os network upstream api state hysteria firewall client output installer repair diagnostics backup update uninstall; do
+    # shellcheck source=/dev/null
+    . "$HY2_LIB_DIR/$_m.sh"
+done
+unset _m
+
+trap 'hy2_tmp_cleanup' EXIT
+trap 'log_err "interrupted"; exit 130' INT TERM
+trap 'log_debug "error at line $LINENO: $BASH_COMMAND"' ERR
+
+# ---------------------------------------------------------------- CLI
+
+OPT_PORT="" OPT_SERVER_ADDRESS="" OPT_SNI="" OPT_TLS_CERT="" OPT_TLS_KEY="" OPT_CLIENT_NAME=""
+OPT_ALLOW_UNSUPPORTED_OS=0 OPT_PANEL_VERSION=""
+OPT_EXPIRE_DAYS=0 OPT_QUOTA_GB=0 OPT_UNINSTALL_LEVEL="" OPT_SELF=0 OPT_REF="" OPT_FORCE=0
+OPT_NON_INTERACTIVE=0
+CLI_ARGS=()
+
+usage() {
+    cat <<EOF
+${HY2_PRODUCT} ${HY2_VERSION}
+
+Usage: hysteria2 <command> [options]
+
+Commands:
+  install             Install stable 3X-UI + a Hysteria2 inbound + first client
+  menu                Interactive menu
+  status              Health summary (versions, mode, service, Xray, port, inbound, clients)
+  info [NAME]         Connection details and client share links
+  clients             List clients of the managed inbound
+  add-client [NAME]   Add a client   (--expire-days N, --quota-gb N)
+  remove-client NAME  Remove a client
+  enable-client NAME  Enable a client
+  disable-client NAME Disable a client
+  qr [NAME]           Show a client's share link as a terminal QR code
+  logs                Recent wrapper and 3X-UI/Xray logs
+  restart             Restart Xray through 3X-UI and verify UDP
+  diagnostics         Read-only health checks (no secrets printed)
+  backup              Back up the panel database + wrapper state
+  restore [FILE]      Restore from a backup (asks for confirmation)
+  update              Update 3X-UI to the latest STABLE release (backup, verify, rollback)
+  update --self       Update this wrapper from GitHub (--ref REF)
+  repair              Repair only what this wrapper manages and finds broken
+  uninstall           Remove managed config / wrapper / 3X-UI (--level 1|2|3)
+  version             Show versions
+  help                This text
+
+Install options:
+  --port PORT                  UDP inbound port (default: 443; must be free)
+  --server-address ADDRESS     Public IPv4/hostname used in client links (default: auto-detect)
+  --sni HOST                   TLS server name (default: server address)
+  --tls-cert FILE              Existing production certificate (requires --tls-key)
+  --tls-key FILE               Existing production private key (requires --tls-cert)
+  --client-name NAME           First client name (default: ${DEFAULT_CLIENT_NAME})
+  --allow-unsupported-os       Try on an unlisted OS (no guarantees)
+  --panel-version vX.Y.Z       Pin a specific STABLE 3X-UI release (dev builds are never used)
+
+Global options:
+  --non-interactive  Never prompt (use defaults / fail)      -y, --yes  Assume "yes" to confirmations
+  --verbose          Show details                             -h, --help / --version
+EOF
+}
+
+_need_val() { # option value
+    [[ -n "${2:-}" && "${2:0:2}" != "--" ]] || die "option $1 needs a value" "$HY2_EX_USAGE"
+}
+
+parse_args() {
+    CLI_ARGS=()
+    while (($#)); do
+        case "$1" in
+            --port=* | --server-address=* | --sni=* | --tls-cert=* | --tls-key=* | --client-name=* | --panel-version=* | --expire-days=* | --quota-gb=* | --level=* | --ref=*)
+                set -- "${1%%=*}" "${1#*=}" "${@:2}"
+                continue
+                ;;
+            --port) _need_val "$1" "${2:-}" && OPT_PORT="$2" && shift ;;
+            --server-address) _need_val "$1" "${2:-}" && OPT_SERVER_ADDRESS="$2" && shift ;;
+            --sni) _need_val "$1" "${2:-}" && OPT_SNI="$2" && shift ;;
+            --tls-cert) _need_val "$1" "${2:-}" && OPT_TLS_CERT="$2" && shift ;;
+            --tls-key) _need_val "$1" "${2:-}" && OPT_TLS_KEY="$2" && shift ;;
+            --client-name) _need_val "$1" "${2:-}" && OPT_CLIENT_NAME="$2" && shift ;;
+            --panel-version) _need_val "$1" "${2:-}" && OPT_PANEL_VERSION="$2" && shift ;;
+            --expire-days) _need_val "$1" "${2:-}" && OPT_EXPIRE_DAYS="$2" && shift ;;
+            --quota-gb) _need_val "$1" "${2:-}" && OPT_QUOTA_GB="$2" && shift ;;
+            --level) _need_val "$1" "${2:-}" && OPT_UNINSTALL_LEVEL="$2" && shift ;;
+            --ref) _need_val "$1" "${2:-}" && OPT_REF="$2" && shift ;;
+            --self) OPT_SELF=1 ;;
+            --force) OPT_FORCE=1 ;;
+            --allow-unsupported-os) OPT_ALLOW_UNSUPPORTED_OS=1 ;;
+            --non-interactive) OPT_NON_INTERACTIVE=1 ;;
+            -y | --yes) HY2_ASSUME_YES=1 ;;
+            --verbose) HY2_VERBOSE=1 ;;
+            -h | --help) CLI_ARGS+=(help) ;;
+            --version) CLI_ARGS+=(version) ;;
+            --) shift; CLI_ARGS+=("$@"); return 0 ;;
+            -*) die "unknown option: $1 (see: hysteria2 help)" "$HY2_EX_USAGE" ;;
+            *) CLI_ARGS+=("$1") ;;
+        esac
+        shift
+    done
+}
+
+# Common prologue for commands that manage an existing setup.
+session() {
+    hy2_require_root
+    hy2_tmp_init
+    hy2_detect_interactive
+    state_require
+    api_session_init
+}
+
+show_version() {
+    printf '%s %s\n' "$HY2_PRODUCT" "$HY2_VERSION"
+    printf '3X-UI (installed): %s   Xray: %s   (wrapper tested with 3X-UI %s)\n' "$(upstream_version 2>/dev/null || echo 'not installed')" "$(upstream_xray_version 2>/dev/null || echo '-')" "$TESTED_UPSTREAM"
+}
+
+cmd_logs() {
+    hy2_require_root
+    printf '== wrapper log (%s/hysteria2.log) ==\n' "$HY2_LOG_DIR"
+    if [[ -f "$HY2_LOG_DIR/hysteria2.log" ]]; then tail -n 40 "$HY2_LOG_DIR/hysteria2.log"; else echo "(empty)"; fi
+    printf '\n== 3X-UI / Xray (journalctl -u x-ui, last 60 lines) ==\n'
+    if hy2_have journalctl; then
+        journalctl -u "$UPSTREAM_SERVICE" -n 60 --no-pager 2>/dev/null | grep -Eiv 'api.?token|password' || true
+    else
+        echo "journalctl not available"
+    fi
+}
+
+cmd_menu() {
+    hy2_require_root
+    hy2_tmp_init
+    hy2_detect_interactive
+    ((HY2_INTERACTIVE)) || die "the menu needs an interactive terminal" "$HY2_EX_USAGE"
+    state_require
+    api_session_init
+    local c n
+    while :; do
+        printf '\n%s%s%s\n' "$C_BOLD" "$HY2_PRODUCT" "$C_OFF"
+        cat <<'EOF'
+   1) Status                 8) Diagnostics
+   2) Connection info        9) Backup
+   3) List clients          10) Restore
+   4) Add client            11) Update 3X-UI (stable)
+   5) Remove client         12) Repair
+   6) Enable/disable client 13) Logs
+   7) QR code               14) Uninstall
+                            15) Restart Xray
+   0) Exit
+EOF
+        hy2_ask c "Choose" "0"
+        case "$c" in
+            1) output_status || true ;;
+            2) output_info ;;
+            3) client_list ;;
+            4)
+                hy2_ask n "New client name" "$(client_next_default_name)"
+                client_create "$n" || true
+                ;;
+            5)
+                client_list
+                hy2_ask n "Client to remove" ""
+                [[ -n "$n" ]] && hy2_confirm "Remove client '$n'?" n && client_remove "$n"
+                ;;
+            6)
+                client_list
+                hy2_ask n "Client name" ""
+                if [[ -n "$n" ]]; then
+                    if hy2_confirm "Enable it? (No = disable)" y; then
+                        client_set_enabled "$n" true
+                    else
+                        client_set_enabled "$n" false
+                    fi
+                fi
+                ;;
+            7)
+                hy2_ask n "Client name" "$(state_get '(.clients // [])[0].email // empty')"
+                if [[ -n "$n" ]]; then client_qr "$n" || true; fi
+                ;;
+            8) diagnostics_run || true ;;
+            9) printf 'Backup written: %s\n' "$(backup_create manual)" ;;
+            10)
+                backup_list
+                hy2_ask n "Backup file to restore" ""
+                [[ -n "$n" ]] && backup_restore "$n"
+                ;;
+            11) update_panel || true ;;
+            12) repair_run || true ;;
+            13) cmd_logs ;;
+            14)
+                uninstall_run || true
+                state_exists || return 0
+                ;;
+            15)
+                panel_restart_xray && panel_wait_xray_running 45 && install_wait_listening && log_ok "Xray restarted; UDP $PORT is listening"
+                ;;
+            0 | q | quit | exit) return 0 ;;
+            *) log_warn "unknown choice" ;;
+        esac
+    done
+}
+
+main() {
+    local cmd
+    parse_args "$@"
+    cmd="${CLI_ARGS[0]:-help}"
+    [[ "$OPT_NON_INTERACTIVE" == "1" ]] && HY2_FORCE_NONINTERACTIVE=1
+    local -a rest=("${CLI_ARGS[@]:1}")
+
+    case "$cmd" in
+        help) usage ;;
+        version) show_version ;;
+        install)
+            hy2_detect_interactive
+            installer_run
+            ;;
+        menu) cmd_menu ;;
+        status)
+            session
+            output_status
+            ;;
+        info)
+            session
+            output_info "${rest[@]}"
+            ;;
+        clients)
+            session
+            client_list
+            ;;
+        add-client)
+            session
+            hy2_lock
+            local name="${rest[0]:-}"
+            if [[ -z "$name" ]]; then name="$(client_next_default_name)"; fi
+            client_create "$name" "$OPT_EXPIRE_DAYS" "$OPT_QUOTA_GB"
+            output_client_block "$name"
+            ;;
+        remove-client | enable-client | disable-client | qr)
+            session
+            [[ "$cmd" == "qr" ]] || hy2_lock
+            local name="${rest[0]:-}"
+            if [[ -z "$name" && "$cmd" == "qr" ]]; then name="$(state_get '(.clients // [])[0].email // empty')"; fi
+            [[ -n "$name" ]] || die "usage: hysteria2 $cmd NAME" "$HY2_EX_USAGE"
+            case "$cmd" in
+                remove-client)
+                    hy2_confirm "Remove client '$name'? Its link will stop working." n || die "cancelled" "$HY2_EX_GENERAL"
+                    client_remove "$name"
+                    ;;
+                enable-client) client_set_enabled "$name" true ;;
+                disable-client) client_set_enabled "$name" false ;;
+                qr) client_qr "$name" ;;
+            esac
+            ;;
+        logs) cmd_logs ;;
+        restart)
+            session
+            panel_restart_xray || die "could not request an Xray restart: $API_MSG" "$HY2_EX_API"
+            panel_wait_xray_running 45 || die "Xray did not return to running state" "$HY2_EX_STATE"
+            install_wait_listening || die "Xray restarted but UDP $PORT is not listening" "$HY2_EX_STATE"
+            log_ok "Xray restarted; UDP $PORT is listening"
+            ;;
+        diagnostics)
+            session
+            diagnostics_run
+            ;;
+        backup)
+            session
+            hy2_lock
+            log_ok "Backup written: $(backup_create manual)"
+            ;;
+        restore)
+            session
+            hy2_lock
+            if [[ -z "${rest[0]:-}" ]]; then
+                printf 'Available backups:\n'
+                backup_list
+                die "usage: hysteria2 restore FILE" "$HY2_EX_USAGE"
+            fi
+            backup_restore "${rest[0]}"
+            ;;
+        update)
+            if ((OPT_SELF)); then
+                hy2_require_root
+                hy2_tmp_init
+                hy2_lock
+                update_self
+            else
+                hy2_require_root
+                hy2_tmp_init
+                hy2_detect_interactive
+                hy2_lock
+                update_panel
+            fi
+            ;;
+        repair)
+            hy2_require_root
+            hy2_tmp_init
+            hy2_detect_interactive
+            hy2_lock
+            state_require
+            REPAIR_ACTIONS=0
+            repair_session_init
+            repair_run
+            ;;
+        uninstall)
+            hy2_detect_interactive
+            uninstall_run
+            ;;
+        *) die "unknown command '$cmd' (see: hysteria2 help)" "$HY2_EX_USAGE" ;;
+    esac
+}
+
+main "$@"

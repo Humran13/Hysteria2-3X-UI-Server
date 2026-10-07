@@ -1,0 +1,7 @@
+# Unit/static test image (no systemd needed): shellcheck, bats, jq, python3 (mock panel), openssl, qrencode
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      shellcheck bats jq python3 openssl curl ca-certificates iproute2 util-linux tar gzip coreutils qrencode file git procps \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /repo

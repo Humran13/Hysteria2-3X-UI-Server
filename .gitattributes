@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+*.bats text eol=lf
+*.yml text eol=lf
+VERSION text eol=lf
+SHA256SUMS text eol=lf

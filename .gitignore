@@ -1,0 +1,21 @@
+# secrets / runtime state must never be committed
+*.env
+*.key
+*.pem
+api-token
+state.json
+*.db
+*.db-wal
+*.db-shm
+backups/
+*.tar.gz
+!tests/fixtures/*.tar.gz
+tmp/
+.scratch/
+*.log
+.vscode/
+.idea/
+tests/results/
+_reference/
+_upstream/
+vless-reality-installer.zip
