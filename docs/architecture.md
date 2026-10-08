@@ -4,6 +4,6 @@
 
 The inbound uses protocol `hysteria`, inbound and transport version `2`, Hysteria transport, TLS, ALPN `h3`, and UDP. Clients are separate 3X-UI v3 records with random `auth` credentials. After create/update, the code fetches the authoritative record and validates protocol, versions, transport, TLS paths, client auth, core state, UDP socket, and share URI.
 
-Runtime state is root-only in `/etc/hysteria2-3x-ui-server`; backups are in `/var/backups/hysteria2-3x-ui-server`; redacted logs are in `/var/log/hysteria2-3x-ui-server/hysteria2.log`.
+Runtime state is root-only in `/etc/hysteria2-3x-ui-server`; backups are in `/var/backups/hysteria2-3x-ui-server`; redacted wrapper logs are in `/var/log/hysteria2-3x-ui-server/hysteria2.log`. The official 3X-UI installer's filtered live output is also retained, mode `0600`, in `/var/log/hysteria2-3x-ui-install.log`.
 
 The default certificate is self-signed and pinned in the URI. Supplying a trusted certificate/key removes the pin. UFW management adds/removes only the recorded UDP rule and never changes global policy.

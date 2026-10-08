@@ -14,6 +14,7 @@ HY2_HOME="${HY2_HOME:-/opt/hysteria2-3x-ui-server}"
 HY2_STATE_DIR="${HY2_STATE_DIR:-/etc/hysteria2-3x-ui-server}"
 HY2_BACKUP_DIR="${HY2_BACKUP_DIR:-/var/backups/hysteria2-3x-ui-server}"
 HY2_LOG_DIR="${HY2_LOG_DIR:-/var/log/hysteria2-3x-ui-server}"
+HY2_INSTALL_LOG="${HY2_INSTALL_LOG:-/var/log/hysteria2-3x-ui-install.log}"
 HY2_BIN_LINK="${HY2_BIN_LINK:-/usr/local/bin/hysteria2}"
 HY2_LOCK_FILE="${HY2_LOCK_FILE:-/run/lock/hysteria2-3x-ui-server.lock}"
 

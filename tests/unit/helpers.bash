@@ -13,7 +13,7 @@ hy2_test_env() {
         T="$(mktemp -d "${BATS_TMPDIR:-/tmp}/hy2-bats.XXXXXX")"
     fi
     export HY2_TEST_MODE=1 HY2_SKIP_ROOT_CHECK=1 HY2_SKIP_SYSTEMD_CHECK=1 NO_COLOR=1 HY2_FORCE_NONINTERACTIVE=1
-    export HY2_STATE_DIR="$T/state" HY2_LOG_DIR="$T/log" HY2_BACKUP_DIR="$T/backup" HY2_LOCK_FILE="$T/lock"
+    export HY2_STATE_DIR="$T/state" HY2_LOG_DIR="$T/log" HY2_INSTALL_LOG="$T/3x-ui-install.log" HY2_BACKUP_DIR="$T/backup" HY2_LOCK_FILE="$T/lock"
     export HY2_HOME="$T/home" HY2_BIN_LINK="$T/bin/hysteria2" TMPDIR="$T/tmp"
     export XUI_MAIN_FOLDER="$T/xui" HY2_XUI_ETC="$T/xui-etc" MOCK_DIR="$T/mock"
     mkdir -p "$T"/{tmp,bin,shims,xui/bin,xui-etc,mock}
@@ -115,6 +115,8 @@ start_mock() {
     export MOCK_PORT
     export HY2_PANEL_URL="http://127.0.0.1:$MOCK_PORT/$MOCK_BASE"
     export HY2_UPSTREAM_WEB="http://127.0.0.1:$MOCK_PORT/web" HY2_UPSTREAM_RAW="http://127.0.0.1:$MOCK_PORT/raw" HY2_UPSTREAM_API="http://127.0.0.1:$MOCK_PORT/api"
+    # Libraries may already have been loaded by setup(), so refresh their test-only endpoints too.
+    UPSTREAM_WEB="$HY2_UPSTREAM_WEB" UPSTREAM_RAW="$HY2_UPSTREAM_RAW" UPSTREAM_API="$HY2_UPSTREAM_API"
 }
 
 stop_mock() { if [[ -n "${MOCK_PID:-}" ]]; then kill "$MOCK_PID" 2>/dev/null || true; fi; }
@@ -132,6 +134,8 @@ make_fake_upstream() { # tag
 [[ "${XUI_ENABLE_FAIL2BAN:-}" == "false" ]] || exit 9
 [[ -z "${XUI_USERNAME:-}${XUI_PASSWORD:-}${XUI_PANEL_PORT:-}${XUI_WEB_BASE_PATH:-}" ]] || { echo "must not pin credentials" >&2; exit 9; }
 echo "Username: admin-secret-user"; echo "Password: hunter2-secret-pass"; echo "API Token: leaked-token-value"
+echo "OS detection: Ubuntu"; echo "Architecture detection: amd64"; echo "Downloading release asset: 50%"; echo "Checksum verification: OK"
+echo "Extracting archive"; echo "Creating systemd service"; echo "Starting migrations"; echo "Installation completed"
 [[ -n "${FAKE_INSTALL_FAIL:-}" ]] && exit 1
 cp "$MOCK_DIR/../xui/x-ui.template" "$XUI_MAIN_FOLDER/x-ui" 2>/dev/null || true
 touch "$XUI_MAIN_FOLDER/.installed"

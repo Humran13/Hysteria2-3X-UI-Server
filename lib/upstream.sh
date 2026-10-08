@@ -102,36 +102,162 @@ upstream_fetch_script() {
     printf '%s' "$dest"
 }
 
-# Run an upstream script with all output captured (it prints credentials!). Show only a filtered tail on failure.
+# Prepare a private, append-only log for the already-filtered upstream output.
+_upstream_log_init() {
+    local parent
+    parent="$(dirname "$HY2_INSTALL_LOG")"
+    if [[ ! -d "$parent" ]]; then
+        (umask 077 && mkdir -p "$parent") || {
+            log_err "cannot create upstream installation log directory: $parent"
+            return 1
+        }
+    fi
+    (umask 077 && touch "$HY2_INSTALL_LOG") || {
+        log_err "cannot write upstream installation log: $HY2_INSTALL_LOG"
+        return 1
+    }
+    chmod 600 "$HY2_INSTALL_LOG" || return 1
+}
+
+# Turn both newline output and curl/dpkg carriage-return progress into records.
+# A shell reader is used because common text filters block-buffer CR-only output.
+_upstream_split_records() {
+    local char record="" previous_delimiter=""
+    while IFS= read -r -N 1 char; do
+        case "$char" in
+            $'\r')
+                printf '%s\n' "$record"
+                record=""
+                previous_delimiter="cr"
+                ;;
+            $'\n')
+                # CRLF is one record boundary, not a blank record.
+                [[ "$previous_delimiter" == "cr" ]] || printf '%s\n' "$record"
+                record=""
+                previous_delimiter="lf"
+                ;;
+            *)
+                record+="$char"
+                previous_delimiter=""
+                ;;
+        esac
+    done
+    [[ -z "$record" ]] || printf '%s\n' "$record"
+}
+
+# Strip terminal control sequences and redact credential-bearing records while
+# preserving ordinary installer progress. awk's interactive mode and fflush
+# move each record immediately to both the terminal and tee's log files.
+_upstream_filter() {
+    local started="${1:-$(date +%s)}" esc
+    esc="$(printf '\033')"
+    awk -W interactive -v started="$started" -v esc="$esc" '
+        {
+            line = $0
+            gsub(esc "\\[[0-9;?]*[ -/]*[@-~]", "", line)
+            lower = tolower(line)
+
+            # Preserve the record label/progress context, but never its value.
+            # This avoids the old behaviour of deleting every matching line.
+            if (lower ~ /(user(name)?|pass(word)?|api[ _-]*token|access[ _-]*url|web[ _-]*base[ _-]*path|credential|dsn)/ &&
+                line ~ /[:=]/) {
+                match(line, /[:=]/)
+                line = substr(line, 1, RSTART) " <redacted>"
+            } else {
+                # Also protect embedded basic-auth/database URLs on otherwise
+                # useful progress lines.
+                gsub(/:\/\/[^[:space:]\/:@]+:[^[:space:]\/@]+@/, "://<redacted>@", line)
+            }
+
+            elapsed = systime() - started
+            printf "[+%02dm%02ds] %s\n", int(elapsed / 60), elapsed % 60, line
+            fflush()
+        }
+    '
+}
+
+_upstream_log_marker() {
+    local message="$1"
+    printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" | tee -a "$HY2_INSTALL_LOG" >&2
+}
+
+# Fail quickly when the endpoints used by the official installer cannot be
+# reached. This deliberately does not alter or patch the upstream installer.
+upstream_preflight() {
+    local tag="$1" arch="${ARCH:-}" label url started elapsed
+    local connect_timeout="${HY2_PREFLIGHT_CONNECT_TIMEOUT:-5}"
+    local max_time="${HY2_PREFLIGHT_MAX_TIME:-20}"
+    [[ "$arch" == "amd64" || "$arch" == "arm64" ]] || {
+        log_err "cannot preflight the 3X-UI release asset for unsupported architecture '$arch'"
+        return 1
+    }
+
+    log_info "Checking GitHub connectivity before starting the official 3X-UI installer..."
+    while IFS='|' read -r label url; do
+        started="$(date +%s)"
+        if curl -fsSIL --retry 1 --retry-delay 1 --connect-timeout "$connect_timeout" --max-time "$max_time" \
+            -o /dev/null "$url"; then
+            elapsed=$(( $(date +%s) - started ))
+            log_ok "Connectivity check passed: $label (${elapsed}s)"
+        else
+            elapsed=$(( $(date +%s) - started ))
+            log_err "GitHub connectivity check failed for $label after ${elapsed}s: $url"
+            log_err "The official installer was not started. Check DNS, firewall, IPv6 routing, or VPS access to GitHub, then retry."
+            return 1
+        fi
+    done <<EOF
+github.com|${UPSTREAM_WEB}/
+raw.githubusercontent.com|${UPSTREAM_RAW}/${tag}/install.sh
+3X-UI ${tag} release asset|${UPSTREAM_WEB}/releases/download/${tag}/x-ui-linux-${arch}.tar.gz
+EOF
+}
+
+# Run an upstream script with safe output streamed to the terminal by default
+# and appended to a private installation log. stdin remains disconnected.
 _upstream_run_script() {
     local script="$1"
     shift
-    local out rc=0
+    local out rc=0 started elapsed had_errexit=0
+    local -a pipeline_status=()
     out="$(hy2_mktemp upstream-out)"
-    if [[ "$HY2_VERBOSE" == "1" ]]; then
-        "$@" bash "$script" "${UPSTREAM_SCRIPT_ARGS[@]}" </dev/null 2>&1 | _upstream_filter | tee "$out" >&2 || rc=${PIPESTATUS[0]}
-    else
-        "$@" bash "$script" "${UPSTREAM_SCRIPT_ARGS[@]}" </dev/null >"$out" 2>&1 || rc=$?
+    _upstream_log_init || return 1
+    started="$(date +%s)"
+    _upstream_log_marker "Starting official 3X-UI operation (pid $$); filtered live output follows."
+
+    [[ $- == *e* ]] && had_errexit=1
+    set +e
+    "$@" bash "$script" "${UPSTREAM_SCRIPT_ARGS[@]}" </dev/null 2>&1 \
+        | _upstream_split_records \
+        | _upstream_filter "$started" \
+        | tee -a "$HY2_INSTALL_LOG" "$out" >&2
+    pipeline_status=("${PIPESTATUS[@]}")
+    ((had_errexit)) && set -e
+    rc="${pipeline_status[0]}"
+    elapsed=$(( $(date +%s) - started ))
+
+    if ((pipeline_status[1] != 0 || pipeline_status[2] != 0 || pipeline_status[3] != 0)); then
+        log_warn "an output-filtering or logging stage failed while the upstream installer was running"
+        ((rc == 0)) && rc=1
     fi
     if ((rc != 0)); then
         log_err "upstream script failed (exit $rc). Last output (credentials filtered):"
-        _upstream_filter <"$out" | tail -n 25 | while IFS= read -r l; do log_err "  $l"; done
+        tail -n 25 "$out" | while IFS= read -r l; do log_err "  $l"; done
+        _upstream_log_marker "Official 3X-UI operation failed with exit $rc after ${elapsed}s."
+    else
+        _upstream_log_marker "Official 3X-UI operation completed after ${elapsed}s."
     fi
     rm -f "$out"
     return "$rc"
-}
-
-# Strip colour codes and any line that could carry credentials.
-_upstream_filter() {
-    sed -E 's/\x1b\[[0-9;]*m//g' | grep -Eiv 'username|password|api ?token|access url|webbasepath|credentials|dsn' || true
 }
 
 # upstream_install TAG  - unattended install of the pinned STABLE tag via the official installer.
 upstream_install() {
     local tag="$1" script
     valid_stable_tag "$tag" || die "refusing to install non-stable upstream ref '$tag'" "$HY2_EX_UPSTREAM"
+    upstream_preflight "$tag" || return 1
     script="$(upstream_fetch_script install.sh "$tag")" || return 1
-    log_info "Running the official 3X-UI installer ($tag) unattended; this can take a minute..."
+    log_info "Running the official 3X-UI installer ($tag). Live installation output follows; download time depends on your VPS connection."
+    log_info "Filtered installation log: $HY2_INSTALL_LOG"
     UPSTREAM_SCRIPT_ARGS=("$tag")
     # Random username/password/port/base-path/API token are generated by upstream (we deliberately set none of them).
     _upstream_run_script "$script" env XUI_NONINTERACTIVE=1 XUI_ENABLE_FAIL2BAN=false || return 1

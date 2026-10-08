@@ -107,6 +107,9 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.route("GET")
 
+    def do_HEAD(self):
+        self.route("HEAD")
+
     def do_POST(self):
         self.route("POST")
 
@@ -132,6 +135,10 @@ class H(BaseHTTPRequestHandler):
             return self._send(302, b"", "text/plain", {"Location": f"/web/releases/tag/{tag}"})
         if path.startswith("/web/releases/tag/"):
             return self._send(200, b"ok", "text/plain")
+        if path == "/web/":
+            return self._send(200, b"ok", "text/plain")
+        if re.match(r"^/web/releases/download/v[0-9]+\.[0-9]+\.[0-9]+/x-ui-linux-(amd64|arm64)\.tar\.gz$", path):
+            return self._send(200, b"asset", "application/gzip")
         if path == "/api/releases/latest":
             return self._send(200, {"tag_name": S["latest_tag"], "prerelease": False, "draft": False})
         m = re.match(r"^/raw/([^/]+)/(.+)$", path)
