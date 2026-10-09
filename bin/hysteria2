@@ -28,7 +28,7 @@ trap 'log_debug "error at line $LINENO: $BASH_COMMAND"' ERR
 OPT_PORT="" OPT_SERVER_ADDRESS="" OPT_SNI="" OPT_TLS_CERT="" OPT_TLS_KEY="" OPT_CLIENT_NAME=""
 OPT_ALLOW_UNSUPPORTED_OS=0 OPT_PANEL_VERSION=""
 OPT_EXPIRE_DAYS=0 OPT_QUOTA_GB=0 OPT_UNINSTALL_LEVEL="" OPT_SELF=0 OPT_REF="" OPT_FORCE=0
-OPT_NON_INTERACTIVE=0
+OPT_NON_INTERACTIVE=0 OPT_FORMAT=""
 CLI_ARGS=()
 
 usage() {
@@ -48,6 +48,7 @@ Commands:
   enable-client NAME  Enable a client
   disable-client NAME Disable a client
   qr [NAME]           Show a client's share link as a terminal QR code
+  export [NAME]       Export a client (--format uri)
   logs                Recent wrapper and 3X-UI/Xray logs
   restart             Restart Xray through 3X-UI and verify UDP
   diagnostics         Read-only health checks (no secrets printed)
@@ -70,6 +71,9 @@ Install options:
   --allow-unsupported-os       Try on an unlisted OS (no guarantees)
   --panel-version vX.Y.Z       Pin a specific STABLE 3X-UI release (dev builds are never used)
 
+Export options:
+  --format FORMAT              Export format (currently: uri)
+
 Global options:
   --non-interactive  Never prompt (use defaults / fail)      -y, --yes  Assume "yes" to confirmations
   --verbose          Show details                             -h, --help / --version
@@ -84,7 +88,7 @@ parse_args() {
     CLI_ARGS=()
     while (($#)); do
         case "$1" in
-            --port=* | --server-address=* | --sni=* | --tls-cert=* | --tls-key=* | --client-name=* | --panel-version=* | --expire-days=* | --quota-gb=* | --level=* | --ref=*)
+            --port=* | --server-address=* | --sni=* | --tls-cert=* | --tls-key=* | --client-name=* | --panel-version=* | --expire-days=* | --quota-gb=* | --level=* | --ref=* | --format=*)
                 set -- "${1%%=*}" "${1#*=}" "${@:2}"
                 continue
                 ;;
@@ -99,6 +103,7 @@ parse_args() {
             --quota-gb) _need_val "$1" "${2:-}" && OPT_QUOTA_GB="$2" && shift ;;
             --level) _need_val "$1" "${2:-}" && OPT_UNINSTALL_LEVEL="$2" && shift ;;
             --ref) _need_val "$1" "${2:-}" && OPT_REF="$2" && shift ;;
+            --format) _need_val "$1" "${2:-}" && OPT_FORMAT="$2" && shift ;;
             --self) OPT_SELF=1 ;;
             --force) OPT_FORCE=1 ;;
             --allow-unsupported-os) OPT_ALLOW_UNSUPPORTED_OS=1 ;;
@@ -263,6 +268,15 @@ main() {
                 enable-client) client_set_enabled "$name" true ;;
                 disable-client) client_set_enabled "$name" false ;;
                 qr) client_qr "$name" ;;
+            esac
+            ;;
+        export)
+            session
+            local name="${rest[0]:-$(state_get '(.clients // [])[0].email // empty')}"
+            [[ -n "$name" ]] || die "usage: hysteria2 export NAME --format uri" "$HY2_EX_USAGE"
+            case "${OPT_FORMAT:-uri}" in
+                uri) client_link "$name" ;;
+                *) die "unsupported export format '${OPT_FORMAT}' (supported: uri)" "$HY2_EX_USAGE" ;;
             esac
             ;;
         logs) cmd_logs ;;

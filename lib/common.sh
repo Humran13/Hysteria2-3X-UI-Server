@@ -199,6 +199,23 @@ hy2_write_atomic() {
 hy2_now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 hy2_now_stamp() { date -u +%Y%m%d-%H%M%S; }
 
+# RFC 3986 percent-encode one URI component. Operate byte-wise so UTF-8 names
+# round-trip without relying on locale-specific character classes.
+hy2_urlencode() {
+    local LC_ALL=C s="${1:-}" out="" c encoded i
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        case "$c" in
+            [A-Za-z0-9._~-]) out+="$c" ;;
+            *)
+                printf -v encoded '%%%02X' "'$c"
+                out+="$encoded"
+                ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
 # Percent-decode (no eval, no printf %b on user data beyond hex escapes).
 hy2_urldecode() {
     local s="${1//+/ }" out=""

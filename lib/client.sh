@@ -60,12 +60,27 @@ client_set_enabled() {
 
 client_remove() { local name="$1"; client_fetch "$name"; panel_client_del "$name" || die "could not remove client '$name': $API_MSG" "$HY2_EX_API"; state_client_remove "$name" || true; log_ok "Client removed: $name"; }
 
+# Build the canonical official Hysteria2 URI ourselves. 3X-UI v3.9.0 omits
+# insecure=1 for pinned self-signed certificates and emits non-standard query
+# keys, so its share link is deliberately not used for client export.
+client_uri_build() {
+    local auth="$1" name="$2" host="$SERVER_ADDR" query
+    [[ "$host" == *:* ]] && host="[$host]"
+    query="sni=$(hy2_urlencode "$TLS_SNI")"
+    if [[ "$TLS_MODE" == "self-signed-pinned" ]]; then
+        [[ "$TLS_PIN" =~ ^[0-9a-fA-F]{64}$ ]] || return 1
+        query+="&insecure=1&pinSHA256=$(hy2_urlencode "$TLS_PIN")"
+    fi
+    printf 'hysteria2://%s@%s:%s/?%s#%s\n' \
+        "$(hy2_urlencode "$auth")" "$host" "$PORT" "$query" \
+        "$(hy2_urlencode "${INBOUND_REMARK}-${name}")"
+}
+
 client_link() {
     local name="$1" link auth problems rc=0
     client_fetch "$name"; auth="$(api_obj '.obj.client.auth // empty')"
-    panel_client_links "$name" || die "could not get share link for '$name': $API_MSG" "$HY2_EX_API"
-    link="$(api_obj '[.obj[]? | select(startswith("hysteria2://") or startswith("hy2://"))][0] // empty')"
-    [[ -n "$link" ]] || die "the panel returned no Hysteria2 share link for '$name'" "$HY2_EX_API"
+    [[ -n "$auth" ]] || die "client '$name' has no Hysteria2 auth credential" "$HY2_EX_STATE"
+    link="$(client_uri_build "$auth" "$name")" || die "could not build canonical Hysteria2 URI" "$HY2_EX_STATE"
     problems="$(link_validate "$link" "$auth")" || rc=1
     if ((rc)); then log_warn "share link validation failed: $problems"; fi
     printf '%s\n' "$link"; return "$rc"

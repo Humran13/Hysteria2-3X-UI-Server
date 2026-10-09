@@ -174,8 +174,8 @@ os_warn_pending_kernel() {
 # Install packages we depend on (official OS repositories only). Idempotent.
 os_install_deps() {
     local missing=() cmd apt_config
-    local -A pkg_for=([curl]=curl [jq]=jq [openssl]=openssl [ss]=iproute2 [flock]=util-linux [tar]=tar [sha256sum]=coreutils)
-    for cmd in curl jq openssl ss flock tar sha256sum; do
+    local -A pkg_for=([curl]=curl [jq]=jq [openssl]=openssl [ss]=iproute2 [flock]=util-linux [tar]=tar [sha256sum]=coreutils [qrencode]=qrencode)
+    for cmd in curl jq openssl ss flock tar sha256sum qrencode; do
         hy2_have "$cmd" || missing+=("${pkg_for[$cmd]}")
     done
     [[ -d /etc/ssl/certs ]] || missing+=(ca-certificates)

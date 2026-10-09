@@ -14,15 +14,17 @@ Defaults: UDP `443`, remark `Hysteria2`, client `client1`, and a securely genera
 
 Supported targets are Ubuntu 20.04, 22.04, 24.04, and 26.04 on amd64 or arm64 where the current 3X-UI release publishes a matching binary. See [testing notes](docs/testing.md) for what was actually exercised; this is not a claim that every provider/kernel combination was tested.
 
+The installer deliberately exposes one well-tested mode: normal single-port Hysteria2 over UDP/QUIC, with either pinned self-signed TLS or an administrator-supplied trusted certificate. Salamander, Gecko, port hopping, masquerade content, and manual congestion/QUIC tuning are not installer options in this release. Upstream support alone is not treated as validated project support; see the [capability and client matrix](docs/compatibility.md).
+
 ## What it configures
 
 - Official stable [3X-UI](https://github.com/MHSanaei/3x-ui), currently validated against `v3.9.0`.
 - Xray-native Hysteria2: panel protocol `hysteria`, settings version `2`, Hysteria transport version `2`, UDP/QUIC, TLS, ALPN `h3`.
-- A custom share address so the panel emits the public endpoint.
+- A custom share address for the public endpoint. The wrapper generates a canonical Hysteria2 URI instead of relying on the panel's version-specific share-link output.
 - One neutral client whose auth credential is generated with the OS CSPRNG.
 - One `port/udp` UFW rule only when UFW is already active. The installer never enables, resets, or flushes a firewall and never opens the panel port.
 
-The zero-domain default creates a self-signed certificate and puts its SHA-256 pin in the panel-generated URI. This avoids `insecure=1`; the client must support the standard Hysteria2 `pinSHA256` URI parameter.
+The zero-domain default creates a self-signed certificate and puts both `insecure=1` and its SHA-256 pin in the generated URI. The pin still authenticates the expected certificate while `insecure=1` allows the official Hysteria client to accept that self-signed chain. The client must support the standard Hysteria2 `pinSHA256` URI parameter.
 
 For production with a trusted certificate:
 
@@ -43,6 +45,7 @@ sudo hysteria2 info [NAME]
 sudo hysteria2 clients
 sudo hysteria2 add-client [NAME] [--expire-days N] [--quota-gb N]
 sudo hysteria2 qr [NAME]
+sudo hysteria2 export [NAME] --format uri
 sudo hysteria2 disable-client NAME
 sudo hysteria2 enable-client NAME
 sudo hysteria2 remove-client NAME

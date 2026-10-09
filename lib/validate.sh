@@ -18,6 +18,33 @@ valid_ipv4() {
     done
 }
 
+valid_ipv6() {
+    local ip="${1:-}" left right part count=0
+    local -a parts=()
+    [[ "$ip" == *:* && "$ip" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+    if [[ "$ip" == *::* ]]; then
+        # Exactly one :: may compress one or more of the eight 16-bit groups.
+        right="${ip#*::}"
+        [[ "$right" != *::* ]] || return 1
+        left="${ip%%::*}"
+        for part in "$left" "$right"; do
+            [[ -n "$part" ]] || continue
+            IFS=: read -r -a parts <<<"$part"
+            for part in "${parts[@]}"; do
+                [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+                count=$((count + 1))
+            done
+        done
+        ((count < 8))
+    else
+        IFS=: read -r -a parts <<<"$ip"
+        ((${#parts[@]} == 8)) || return 1
+        for part in "${parts[@]}"; do
+            [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+        done
+    fi
+}
+
 # RFC 1123 hostname (labels 1-63 chars, total <= 253), must contain at least one dot unless "localhost"-like single label allowed.
 valid_hostname() {
     local h="${1:-}"
@@ -28,9 +55,9 @@ valid_hostname() {
     return 0
 }
 
-# Address clients connect to: IPv4 or DNS name.
+# Address clients connect to: IPv4, IPv6 or DNS name.
 valid_server_address() {
-    valid_ipv4 "$1" || valid_hostname "$1"
+    valid_ipv4 "$1" || valid_ipv6 "$1" || valid_hostname "$1"
 }
 
 # SNI must be a DNS hostname with a dot (IP literals are not valid SNI values).

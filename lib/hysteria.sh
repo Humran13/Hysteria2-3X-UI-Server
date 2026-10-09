@@ -37,7 +37,7 @@ hysteria_prepare_tls() {
         TLS_PIN=""
     else
         TLS_MODE="self-signed-pinned"
-        if valid_ipv4 "$TLS_SNI"; then san="IP:$TLS_SNI"; else san="DNS:$TLS_SNI"; fi
+        if valid_ipv4 "$TLS_SNI" || valid_ipv6 "$TLS_SNI"; then san="IP:$TLS_SNI"; else san="DNS:$TLS_SNI"; fi
         if [[ ! -s "$dir/server.crt" || ! -s "$dir/server.key" ]]; then
             log_info "Generating a pinned self-signed TLS certificate for $TLS_SNI"
             openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 825 \
@@ -93,6 +93,7 @@ link_parse() {
     rest="${rest#*@}"
     if [[ "$rest" == *"#"* ]]; then LINK_NAME="$(hy2_urldecode "${rest#*#}")"; rest="${rest%%#*}"; fi
     hostport="${rest%%\?*}"
+    hostport="${hostport%/}"
     query=""; [[ "$rest" == *\?* ]] && query="${rest#*\?}"
     if [[ "$hostport" == \[*\]:* ]]; then
         LINK_HOST="${hostport%%]:*}"; LINK_HOST="${LINK_HOST#[}"
@@ -115,11 +116,13 @@ link_validate() {
     [[ -z "$want_auth" || "$LINK_AUTH" == "$want_auth" ]] || problems+=("client auth mismatch")
     [[ "$LINK_HOST" == "$SERVER_ADDR" ]] || problems+=("host '$LINK_HOST' != '$SERVER_ADDR'")
     [[ "$LINK_PORT" == "$PORT" ]] || problems+=("port '$LINK_PORT' != '$PORT'")
-    [[ "${LINK_P[security]:-tls}" == "tls" ]] || problems+=("security is not tls")
     [[ "${LINK_P[sni]:-}" == "$TLS_SNI" ]] || problems+=("SNI mismatch")
-    [[ "${LINK_P[alpn]:-h3}" == *h3* ]] || problems+=("ALPN does not include h3")
     if [[ -n "$TLS_PIN" ]]; then
+        [[ "${LINK_P[insecure]:-}" == "1" ]] || problems+=("self-signed TLS requires insecure=1 with the pin")
         [[ "${LINK_P[pinSHA256]:-}" == "$TLS_PIN" ]] || problems+=("certificate pin mismatch")
+    else
+        [[ -z "${LINK_P[insecure]:-}" || "${LINK_P[insecure]}" == "0" ]] || problems+=("trusted TLS must not use insecure=1")
+        [[ -z "${LINK_P[pinSHA256]:-}" ]] || problems+=("trusted TLS must not export a certificate pin")
     fi
     if ((${#problems[@]})); then printf '%s\n' "${problems[@]}"; return 1; fi
 }

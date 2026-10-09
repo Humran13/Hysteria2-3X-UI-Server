@@ -43,8 +43,11 @@ backup_create() {
     fi
 
     jq -n --arg wv "$HY2_VERSION" --arg uv "$(upstream_version || echo unknown)" --arg xv "$(upstream_xray_version || echo unknown)" \
-        --arg now "$(hy2_now_iso)" --arg label "$label" --argjson prog "$([[ -f "$work/program.tar.gz" ]] && echo true || echo false)" \
-        '{format: 2, created_at: $now, kind: $label, wrapper_version: $wv, panel_version: $uv, xray_version: $xv, protocol: "hysteria2", has_program: $prog}' >"$work/manifest.json"
+        --arg now "$(hy2_now_iso)" --arg kind "$label" --argjson prog "$([[ -f "$work/program.tar.gz" ]] && echo true || echo false)" \
+        '{format: 2, created_at: $now, kind: $kind, wrapper_version: $wv, panel_version: $uv, xray_version: $xv, protocol: "hysteria2", has_program: $prog}' >"$work/manifest.json" || {
+        rm -rf "$work"
+        die "failed to write backup manifest" "$HY2_EX_ENV"
+    }
 
     (umask 077 && tar -czf "$out" -C "$work" .) || die "failed to write backup archive" "$HY2_EX_ENV"
     chmod 600 "$out"
