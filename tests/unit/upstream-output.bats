@@ -98,6 +98,18 @@ EOS
     grep -q 'failed with exit 37' "$HY2_INSTALL_LOG"
 }
 
+@test "upstream watchdog warns after an output stall without killing the installer" {
+    make_streaming_installer
+    UPSTREAM_SCRIPT_ARGS=()
+    HY2_UPSTREAM_STALL_WARN_SECONDS=1
+
+    run _upstream_run_script "$STREAM_SCRIPT" env XUI_NONINTERACTIVE=1 STREAM_HOLD=2
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No upstream output for 1s"* ]]
+    [[ "$output" == *"Installation completed"* ]]
+}
+
 @test "failed GitHub connectivity stops before installer launch with a useful error" {
     ARCH=amd64
     UPSTREAM_WEB="http://127.0.0.1:1"
@@ -126,5 +138,35 @@ EOS
     [[ "$output" == *"Installation completed"* ]]
     [[ "$output" != *"hunter2-secret-pass"* ]]
     [[ "$output" != *"leaked-token-value"* ]]
+    [[ "$output" != *"awk: option"* ]]
     grep -q 'Checksum verification: OK' "$HY2_INSTALL_LOG"
+}
+
+@test "Ubuntu upstream package environment disables needrestart and debconf prompts" {
+    start_mock
+    prepare_uninstalled_panel
+    ARCH=amd64
+
+    run upstream_install v3.9.0
+
+    [ "$status" -eq 0 ]
+    grep -qx 'DEBIAN_FRONTEND=noninteractive' "$MOCK_DIR/upstream-package-env"
+    grep -qx 'DEBCONF_NONINTERACTIVE_SEEN=true' "$MOCK_DIR/upstream-package-env"
+    grep -qx 'NEEDRESTART_MODE=a' "$MOCK_DIR/upstream-package-env"
+    grep -qx 'APT_LISTCHANGES_FRONTEND=none' "$MOCK_DIR/upstream-package-env"
+    grep -qx 'UCF_FORCE_CONFFOLD=1' "$MOCK_DIR/upstream-package-env"
+}
+
+@test "pending installed kernel warns but does not block installation" {
+    mkdir -p "$T/boot"
+    touch "$T/boot/vmlinuz-6.8.0-139-generic" "$T/boot/vmlinuz-6.8.0-146-generic"
+    HY2_BOOT_DIR="$T/boot"
+    HY2_UNAME_R="6.8.0-139-generic"
+
+    run os_warn_pending_kernel
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"newer kernel is installed"* ]]
+    [[ "$output" == *"Continuing unattended; no keyboard input will be required"* ]]
+    [[ "$output" == *"Reboot the VPS after installation"* ]]
 }

@@ -129,9 +129,51 @@ os_check_all() {
     hy2_have apt-get || die "apt-get not found; only apt-based systems are implemented" "$HY2_EX_ENV"
 }
 
+# Create a process-scoped APT configuration that resolves dpkg conffile
+# questions without a terminal. Existing local configuration wins when dpkg
+# cannot apply its normal default action. Nothing under /etc is modified.
+apt_unattended_config_create() {
+    local config
+    config="$(hy2_mktemp apt-unattended)" || return 1
+    cat >"$config" <<'EOF'
+Dpkg::Options {
+    "--force-confdef";
+    "--force-confold";
+};
+APT::Get::Assume-Yes "true";
+EOF
+    chmod 600 "$config"
+    printf '%s' "$config"
+}
+
+# Warn, but never block, when a newer bootable kernel is installed. Test-only
+# path/version overrides let the condition be covered without changing /boot.
+os_warn_pending_kernel() {
+    local boot_dir="/boot" running newest image
+    local -a installed=()
+    if [[ "${HY2_TEST_MODE:-0}" == "1" ]]; then
+        boot_dir="${HY2_BOOT_DIR:-$boot_dir}"
+        running="${HY2_UNAME_R:-$(uname -r)}"
+    else
+        running="$(uname -r)"
+    fi
+    [[ -d "$boot_dir" ]] || return 0
+    for image in "$boot_dir"/vmlinuz-*; do
+        [[ -e "$image" ]] || continue
+        installed+=("${image##*/vmlinuz-}")
+    done
+    ((${#installed[@]})) || return 0
+    newest="$(printf '%s\n' "${installed[@]}" | sort -V | tail -n1)"
+    [[ -n "$newest" && "$newest" != "$running" ]] || return 0
+    [[ "$(printf '%s\n' "$running" "$newest" | sort -V | tail -n1)" == "$newest" ]] || return 0
+    log_warn "A newer kernel is installed but this VPS has not been rebooted (running $running; newest $newest)."
+    log_info "Continuing unattended; no keyboard input will be required."
+    log_warn "Reboot the VPS after installation if you want to load the newer kernel."
+}
+
 # Install packages we depend on (official OS repositories only). Idempotent.
 os_install_deps() {
-    local missing=() cmd
+    local missing=() cmd apt_config
     local -A pkg_for=([curl]=curl [jq]=jq [openssl]=openssl [ss]=iproute2 [flock]=util-linux [tar]=tar [sha256sum]=coreutils)
     for cmd in curl jq openssl ss flock tar sha256sum; do
         hy2_have "$cmd" || missing+=("${pkg_for[$cmd]}")
@@ -142,9 +184,12 @@ os_install_deps() {
         return 0
     fi
     log_info "Installing dependencies from the OS repositories: ${missing[*]}"
-    export DEBIAN_FRONTEND=noninteractive
-    hy2_run_logged apt-get update -q || log_warn "apt-get update reported problems; trying to continue"
-    hy2_run_logged apt-get install -y -q --no-install-recommends "${missing[@]}" || die "failed to install dependencies: ${missing[*]}" "$HY2_EX_ENV"
+    apt_config="$(apt_unattended_config_create)" || die "cannot create temporary unattended APT configuration" "$HY2_EX_ENV"
+    local -a apt_env=(env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical DEBCONF_NONINTERACTIVE_SEEN=true
+        NEEDRESTART_MODE=a APT_LISTCHANGES_FRONTEND=none UCF_FORCE_CONFFOLD=1 APT_CONFIG="$apt_config")
+    hy2_run_logged "${apt_env[@]}" apt-get update -q || log_warn "apt-get update reported problems; trying to continue"
+    hy2_run_logged "${apt_env[@]}" apt-get install -y -q --no-install-recommends "${missing[@]}" \
+        || die "failed to install dependencies: ${missing[*]}" "$HY2_EX_ENV"
 }
 
 # Run a command; on failure show the tail of its output. Output is kept out of the terminal unless --verbose.

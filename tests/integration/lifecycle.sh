@@ -6,7 +6,19 @@ WORK=/tmp/hy2-source
 cp -a "$SRC" "$WORK"
 chmod +x "$WORK/install.sh" "$WORK/bin/hysteria2" "$WORK/tools/"*.sh
 
-"$WORK/install.sh" --panel-version v3.9.0 --server-address 127.0.0.1 --non-interactive
+if [[ "${HY2_INTEGRATION_PENDING_KERNEL:-0}" == "1" ]]; then
+    mkdir -p /boot
+    touch "/boot/vmlinuz-$(uname -r)" /boot/vmlinuz-99.99.0-integration-test
+    "$WORK/install.sh" --panel-version v3.9.0 --server-address 127.0.0.1 --non-interactive 2>&1 | tee /tmp/hy2-install.log
+    grep -q 'newer kernel is installed' /tmp/hy2-install.log
+    grep -q 'Continuing unattended; no keyboard input will be required' /tmp/hy2-install.log
+    if grep -q "awk: option .*interactive.*unrecognized" /tmp/hy2-install.log; then
+        echo 'unsupported awk interactive warning was emitted' >&2
+        exit 1
+    fi
+else
+    "$WORK/install.sh" --panel-version v3.9.0 --server-address 127.0.0.1 --non-interactive
+fi
 hysteria2 status
 hysteria2 diagnostics
 

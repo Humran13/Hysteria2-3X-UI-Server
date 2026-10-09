@@ -132,6 +132,15 @@ make_fake_upstream() { # tag
 # fake MHSanaei/3x-ui installer (sha256 verification is mentioned so our sanity guard passes)
 [[ "${XUI_NONINTERACTIVE:-}" == "1" ]] || { echo "not non-interactive" >&2; exit 9; }
 [[ "${XUI_ENABLE_FAIL2BAN:-}" == "false" ]] || exit 9
+[[ "${DEBIAN_FRONTEND:-}" == "noninteractive" ]] || { echo "debconf is interactive" >&2; exit 9; }
+[[ "${DEBCONF_NONINTERACTIVE_SEEN:-}" == "true" ]] || exit 9
+[[ "${NEEDRESTART_MODE:-}" == "a" ]] || { echo "needrestart is interactive" >&2; exit 9; }
+[[ "${APT_LISTCHANGES_FRONTEND:-}" == "none" ]] || exit 9
+[[ "${UCF_FORCE_CONFFOLD:-}" == "1" ]] || exit 9
+[[ -r "${APT_CONFIG:-}" ]] && grep -q -- '--force-confold' "$APT_CONFIG" || { echo "missing apt conffile policy" >&2; exit 9; }
+printf 'DEBIAN_FRONTEND=%s\nDEBCONF_NONINTERACTIVE_SEEN=%s\nNEEDRESTART_MODE=%s\nAPT_LISTCHANGES_FRONTEND=%s\nUCF_FORCE_CONFFOLD=%s\n' \
+    "$DEBIAN_FRONTEND" "$DEBCONF_NONINTERACTIVE_SEEN" "$NEEDRESTART_MODE" "$APT_LISTCHANGES_FRONTEND" "$UCF_FORCE_CONFFOLD" \
+    >"$MOCK_DIR/upstream-package-env"
 [[ -z "${XUI_USERNAME:-}${XUI_PASSWORD:-}${XUI_PANEL_PORT:-}${XUI_WEB_BASE_PATH:-}" ]] || { echo "must not pin credentials" >&2; exit 9; }
 echo "Username: admin-secret-user"; echo "Password: hunter2-secret-pass"; echo "API Token: leaked-token-value"
 echo "OS detection: Ubuntu"; echo "Architecture detection: amd64"; echo "Downloading release asset: 50%"; echo "Checksum verification: OK"

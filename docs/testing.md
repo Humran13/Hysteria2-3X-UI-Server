@@ -2,7 +2,7 @@
 
 Run `bash tests/run-unit.sh`. The suite checks shell syntax, the Hysteria2 v2 payload, TLS pin generation, URI validation, client add/read/list/link/enable/disable/remove behavior against a 3X-UI API mock, UDP UFW ownership, and root-only state.
 
-The schema and URI behavior were checked against official 3X-UI `v3.9.0`. `bash tests/integration/run.sh ubuntu:24.04` runs a privileged systemd container with the real installer, 3X-UI and Xray, including traffic through a generated Hysteria2 client.
+The schema and URI behavior were checked against official 3X-UI `v3.9.0`. `bash tests/integration/run.sh ubuntu:24.04` runs a privileged systemd container with `needrestart`, the real installer, 3X-UI and Xray, including traffic through a generated Hysteria2 client. Setting `HY2_INTEGRATION_PENDING_KERNEL=1` for the lifecycle simulates a newer installed kernel and verifies the non-blocking warning path.
 
 | Target | Architecture | Status |
 |---|---|---|

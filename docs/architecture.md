@@ -6,4 +6,6 @@ The inbound uses protocol `hysteria`, inbound and transport version `2`, Hysteri
 
 Runtime state is root-only in `/etc/hysteria2-3x-ui-server`; backups are in `/var/backups/hysteria2-3x-ui-server`; redacted wrapper logs are in `/var/log/hysteria2-3x-ui-server/hysteria2.log`. The official 3X-UI installer's filtered live output is also retained, mode `0600`, in `/var/log/hysteria2-3x-ui-install.log`.
 
+APT work runs with process-scoped noninteractive debconf, automatic `needrestart`, and a temporary dpkg conffile policy that keeps existing local configuration. The project does not modify `/etc/needrestart` or persist these package-manager settings. A pending newer kernel produces a warning and post-install reboot recommendation, but does not stop installation.
+
 The default certificate is self-signed and pinned in the URI. Supplying a trusted certificate/key removes the pin. UFW management adds/removes only the recorded UDP rule and never changes global policy.
